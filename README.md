@@ -156,7 +156,17 @@ GOOGLE_CLIENT_SECRET_FILE=credentials/google-oauth-client.json
 
 ---
 
-## 3. Slack Bot Token 복사하기
+## 3. Slack 앱 준비하기
+
+Slack은 워크스페이스마다 앱 설치가 필요합니다.
+
+이미 사용할 Slack 앱이 설치되어 있고 Bot Token을 받을 수 있다면 `3-1`만 보면 됩니다.
+
+다른 워크스페이스에서 쓰거나, 내가 만든 Slack 앱을 다른 사람이 사용할 수 없다면 `3-2`에 따라 각자 Slack 앱을 새로 만들어야 합니다.
+
+---
+
+## 3-1. 기존 Slack 앱의 Bot Token 복사하기
 
 이미 회사 Slack 앱이 설치되어 있다면 새 앱을 만들 필요는 없습니다. 기존 앱의 Bot Token만 복사해서 `.env`에 넣으면 됩니다.
 
@@ -201,6 +211,78 @@ im:write
 권한을 새로 추가했다면 `OAuth & Permissions` 화면에서 `Reinstall to Workspace`를 한 번 해야 합니다.
 
 주의: `SLACK_BOT_TOKEN`은 비밀번호처럼 취급합니다. Git에 올리지 말고, 채팅에도 붙여넣지 않는 것이 좋습니다.
+
+---
+
+## 3-2. Slack 앱 새로 만들기
+
+내가 만든 Slack 앱을 다른 사람이 사용할 수 없거나, 다른 워크스페이스에서 쓰려면 각자 Slack 앱을 만들어서 설치해야 합니다.
+
+Slack 앱 생성 사이트:
+
+```text
+https://api.slack.com/apps
+```
+
+생성 순서:
+
+1. `Create New App` 클릭
+2. `From scratch` 선택
+3. App Name 입력
+   - 예: `gmail-chat`
+4. 설치할 Slack Workspace 선택
+5. `Create App` 클릭
+
+권한 추가:
+
+1. 왼쪽 메뉴에서 `OAuth & Permissions` 클릭
+2. `Scopes` 섹션으로 이동
+3. `Bot Token Scopes`에서 `Add an OAuth Scope` 클릭
+4. 아래 권한 2개 추가
+
+```text
+chat:write
+im:write
+```
+
+권한 의미:
+
+- `chat:write`: Slack에 메시지를 보냅니다.
+- `im:write`: 사용자와 봇 사이의 DM을 엽니다.
+
+워크스페이스 설치:
+
+1. `OAuth & Permissions` 화면 상단으로 이동
+2. `Install to Workspace` 클릭
+3. 권한 허용
+4. 설치가 끝나면 `Bot User OAuth Token`이 생성됩니다.
+5. `xoxb-...` 형태의 토큰을 복사합니다.
+
+`.env`에 넣습니다.
+
+```env
+SLACK_BOT_TOKEN=xoxb-...
+```
+
+권한을 나중에 추가하거나 변경했다면 반드시 다시 설치해야 합니다.
+
+```text
+OAuth & Permissions
+→ Reinstall to Workspace
+```
+
+참고 문서:
+
+```text
+Slack 앱 생성:
+https://api.slack.com/apps
+
+Slack OAuth 설치:
+https://docs.slack.dev/authentication/installing-with-oauth/
+
+Slack 권한 scopes:
+https://docs.slack.dev/reference/scopes/
+```
 
 ---
 
