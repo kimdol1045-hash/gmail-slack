@@ -27,6 +27,9 @@ def _raw_email(message_id: str, subject: str = "Re: Thread A") -> bytes:
 
 class FakeGmailApiClient:
     thread_messages: list[RawGmailMessage] = []
+    thread_ids: list[str] = []
+    thread_message_map: dict[str, list[RawGmailMessage]] = {}
+    requested_limit: int | None = None
 
     def __init__(self, **kwargs) -> None:
         pass
@@ -37,12 +40,43 @@ class FakeGmailApiClient:
     def __exit__(self, exc_type, exc, traceback) -> None:
         return None
 
+    def profile_email(self) -> str:
+        return "me@example.com"
+
+    def profile_history_id(self) -> str:
+        return "history-123"
+
+    def fetch_recent_thread_ids(self, limit: int) -> list[str]:
+        self.__class__.requested_limit = limit
+        return self.thread_ids
+
     def fetch_thread(self, gmail_thread_id: str, *, max_messages: int = 30):
+        if self.thread_message_map:
+            return self.thread_message_map[gmail_thread_id][-max_messages:]
         return self.thread_messages[-max_messages:]
+
+
+class FakeSlackPoster:
+    posted_messages: list[dict[str, str | None]] = []
+
+    def __init__(self, *, bot_token: str, channel_id: str = "", user_id: str = "") -> None:
+        self.channel_id = channel_id or "D123"
+
+    def post_message(self, text: str, *, thread_ts: str | None = None) -> str:
+        ts = f"ts-{len(self.posted_messages) + 1}"
+        self.posted_messages.append(
+            {
+                "text": text,
+                "thread_ts": thread_ts,
+                "ts": ts,
+            }
+        )
+        return ts
 
 
 class FirstSeenBackfillTest(unittest.TestCase):
     def test_backfills_thread_only_when_new_message_appears(self) -> None:
+        FakeGmailApiClient.thread_message_map = {}
         existing = RawGmailMessage(
             uid="gmail-1",
             gmail_thread_id="thread-a",
@@ -120,6 +154,82 @@ class FirstSeenBackfillTest(unittest.TestCase):
         self.assertEqual(allowed, set())
 
 
+class SeedRecentThreadsTest(unittest.TestCase):
+    def test_seeds_recent_threads_and_stores_history_baseline(self) -> None:
+        FakeGmailApiClient.thread_ids = ["thread-new", "thread-old"]
+        FakeGmailApiClient.thread_message_map = {
+            "thread-new": [
+                RawGmailMessage(
+                    uid="gmail-new-1",
+                    gmail_thread_id="thread-new",
+                    raw_bytes=_raw_email("<new-1@example.com>", subject="New thread"),
+                ),
+            ],
+            "thread-old": [
+                RawGmailMessage(
+                    uid="gmail-old-1",
+                    gmail_thread_id="thread-old",
+                    raw_bytes=_raw_email("<old-1@example.com>", subject="Old thread"),
+                ),
+                RawGmailMessage(
+                    uid="gmail-old-2",
+                    gmail_thread_id="thread-old",
+                    raw_bytes=_raw_email("<old-2@example.com>", subject="Re: Old thread"),
+                ),
+            ],
+        }
+        FakeGmailApiClient.requested_limit = None
+        FakeSlackPoster.posted_messages = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = str(Path(temp_dir) / "mirror.sqlite3")
+            service = MirrorService(_config(database_path))
+            original_client = mirror_module.GmailApiClient
+            original_slack = mirror_module.SlackPoster
+            mirror_module.GmailApiClient = FakeGmailApiClient
+            mirror_module.SlackPoster = FakeSlackPoster
+            try:
+                posted_count = service.seed_recent_threads(limit=30)
+            finally:
+                mirror_module.GmailApiClient = original_client
+                mirror_module.SlackPoster = original_slack
+
+            with db.connect(database_path) as connection:
+                db.init_db(connection)
+                history_id = db.get_state(connection, mirror_module.GMAIL_HISTORY_STATE_KEY)
+                old_thread = db.get_thread(connection, "thread-old")
+                new_thread = db.get_thread(connection, "thread-new")
+
+        self.assertEqual(posted_count, 3)
+        self.assertEqual(FakeGmailApiClient.requested_limit, 30)
+        self.assertEqual(history_id, "history-123")
+        self.assertIsNotNone(old_thread)
+        self.assertIsNotNone(new_thread)
+
+        old_parent_text = (
+            "*Old thread*\n"
+            "*From:* Alice <alice@example.com>\n"
+            "*Date:* 2026년 6월 19일 오전 10:00"
+        )
+        new_parent_text = (
+            "*New thread*\n"
+            "*From:* Alice <alice@example.com>\n"
+            "*Date:* 2026년 6월 19일 오전 10:00"
+        )
+        self.assertEqual(FakeSlackPoster.posted_messages[0]["text"], old_parent_text)
+        self.assertEqual(FakeSlackPoster.posted_messages[1]["thread_ts"], "ts-1")
+        self.assertIn(
+            "> Body for <old-1@example.com>",
+            str(FakeSlackPoster.posted_messages[1]["text"]),
+        )
+        self.assertEqual(FakeSlackPoster.posted_messages[2]["thread_ts"], "ts-1")
+        self.assertIn(
+            "`2026년 6월 19일 오전 10:00`",
+            str(FakeSlackPoster.posted_messages[2]["text"]),
+        )
+        self.assertEqual(FakeSlackPoster.posted_messages[3]["text"], new_parent_text)
+
+
 def _config(database_path: str) -> Config:
     return Config(
         gmail_email="me@example.com",
@@ -146,4 +256,3 @@ def _config(database_path: str) -> Config:
 
 if __name__ == "__main__":
     unittest.main()
-

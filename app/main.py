@@ -19,6 +19,11 @@ def main() -> None:
         action="store_true",
         help="Mark currently fetched Gmail messages as processed without Slack posts.",
     )
+    parser.add_argument(
+        "--seed-recent-threads",
+        action="store_true",
+        help="Mirror recent Gmail threads into Slack, then set the Gmail history baseline.",
+    )
     args = parser.parse_args()
 
     needs_runtime = not args.init_db
@@ -39,15 +44,21 @@ def main() -> None:
         print(f"Bootstrapped {marked_count} existing Gmail message(s) without Slack posts.")
         return
 
+    if args.seed_recent_threads:
+        seed_limit = args.limit if args.limit is not None else 30
+        posted_count = service.seed_recent_threads(limit=seed_limit)
+        print(f"Seeded recent Gmail threads with {posted_count} Gmail message(s) mirrored to Slack.")
+        return
+
     if args.once:
         posted_count = service.run_once(limit=args.limit)
-        print(f"Posted {posted_count} new Slack message(s).")
+        print(f"Posted {posted_count} new Gmail message(s) to Slack.")
         return
 
     while True:
         try:
             posted_count = service.run_once(limit=args.limit)
-            logging.info("Posted %s new Slack message(s).", posted_count)
+            logging.info("Posted %s new Gmail message(s) to Slack.", posted_count)
         except KeyboardInterrupt:
             raise
         except Exception:

@@ -59,6 +59,14 @@ Windows 로그인 시 자동 실행하려면:
 Start-ScheduledTask -TaskName GmailChatMirror
 ```
 
+설치 스크립트는 마지막 단계에서 최근 Gmail thread 30개를 Slack에 초기 동기화합니다. 숫자를 바꾸고 싶으면 설치 후 아래 명령을 직접 실행해도 됩니다.
+
+```bash
+python -m app.main --seed-recent-threads --limit 10
+python -m app.main --seed-recent-threads --limit 30
+python -m app.main --seed-recent-threads --limit 50
+```
+
 ---
 
 ## 동작 방식
@@ -79,8 +87,8 @@ Slack 앱 DM
 기본 운영 정책:
 
 - 전체 과거 메일함을 한 번에 Slack에 올리지 않습니다.
-- 처음 실행 시 최근 메일은 “이미 본 것”으로만 기록합니다.
-- 이후 새 메일/답장이 생기면 Slack에 미러링합니다.
+- 처음 연결 시 최근 Gmail thread 30개 정도를 Slack에 먼저 만들어둡니다.
+- 초기 동기화 이후부터는 새 메일/답장을 자동으로 쌓습니다.
 - 새 답장이 달린 Gmail thread가 Slack에 아직 없으면, 그 thread 하나만 과거 메일까지 가져와 Slack thread로 만듭니다.
 - Gmail thread가 이미 Slack에 있으면 새 답장만 기존 Slack thread에 추가합니다.
 
@@ -499,7 +507,7 @@ LOG_LEVEL=INFO
 - `GMAIL_BACKFILL_THREADS=false`: 전체 과거 메일함을 소급하지 않음
 - `GMAIL_BACKFILL_ON_FIRST_SEEN_THREAD=true`: 새 답장이 생긴 thread 하나만 과거 포함해서 Slack thread 생성
 - `GMAIL_MAX_THREAD_MESSAGES=30`: 한 Gmail thread에서 최대 30개 메일까지만 가져옴
-- `FETCH_LIMIT=50`: 최초 bootstrap 또는 Gmail history 기준점이 없을 때 최근 50개를 기준으로 확인
+- `FETCH_LIMIT=50`: Gmail history 기준점이 없을 때 최근 50개를 기준으로 확인
 - `POLL_INTERVAL_SECONDS=60`: 60초마다 확인
 
 Polling 누락 방지:
@@ -507,7 +515,7 @@ Polling 누락 방지:
 - Gmail OAuth 모드에서는 `historyId`를 로컬 DB에 저장합니다.
 - 첫 기준점 이후에는 `FETCH_LIMIT`만 보는 게 아니라 Gmail history API로 “지난 실행 이후 추가된 메시지”를 가져옵니다.
 - 그래서 1분 사이에 메일이 10개 이상 와도 Gmail history에 남아 있으면 놓치지 않습니다.
-- `FETCH_LIMIT`는 최초 bootstrap, 초기 기준점 생성, history 기준점이 없는 예외 상황에서만 중요합니다.
+- `FETCH_LIMIT`는 초기 기준점 생성, history 기준점이 없는 예외 상황에서만 중요합니다.
 
 ---
 
@@ -575,25 +583,36 @@ python scripts\slack_probe.py
 
 ---
 
-## 8. 기존 메일 Bootstrap
+## 8. 첫 연결: 최근 thread 30개 가져오기
 
-처음 실행 전에 현재 최근 메일을 “이미 본 것”으로 기록합니다. 이 단계에서는 Slack에 메시지를 보내지 않습니다.
+처음 연결할 때는 Slack에 아무것도 없으면 불편하므로, 최근 Gmail thread 30개를 먼저 Slack에 만들어둡니다.
+
+각 Gmail thread는 Slack 부모글 1개로 만들어지고, 그 thread 안의 메일들은 Slack replies로 들어갑니다.
+
+너무 많이 가져오고 싶지 않으면 `--limit 10`처럼 숫자를 줄이면 됩니다.
+더 많이 가져오고 싶으면 `--limit 50`처럼 숫자를 늘리면 됩니다.
 
 macOS:
 
 ```bash
 source .venv/bin/activate
-python -m app.main --bootstrap-existing --limit 20
+python -m app.main --seed-recent-threads --limit 30
 ```
 
 Windows:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-python -m app.main --bootstrap-existing --limit 20
+python -m app.main --seed-recent-threads --limit 30
 ```
 
-이후부터 새로 들어오거나 내가 보낸 Gmail 답장만 Slack에 미러링됩니다.
+이 명령이 끝나면 Gmail history 기준점도 저장됩니다. 이후부터는 새로 들어오거나 내가 보낸 Gmail 답장이 기존 Slack thread에 추가됩니다.
+
+과거 메일을 Slack에 올리고 싶지 않은 경우에는 아래 명령을 대신 사용합니다.
+
+```bash
+python -m app.main --bootstrap-existing --limit 20
+```
 
 ---
 

@@ -42,6 +42,52 @@ class MirrorService:
                 )
             return self._mark_existing_messages(connection, raw_messages, my_email)
 
+    def seed_recent_threads(self, *, limit: int = 30) -> int:
+        if self.config.gmail_auth_mode != "oauth":
+            raise RuntimeError("seed_recent_threads is only supported in Gmail OAuth mode")
+
+        posted_count = 0
+        with db.connect(self.config.database_path) as connection:
+            db.init_db(connection)
+            slack = SlackPoster(
+                bot_token=self.config.slack_bot_token,
+                channel_id=self.config.slack_channel_id,
+                user_id=self.config.slack_user_id,
+            )
+
+            with GmailApiClient(
+                client_secret_file=self.config.google_client_secret_file,
+                token_file=self.config.google_token_file,
+                query=self.config.gmail_query,
+            ) as gmail:
+                my_email = self.config.gmail_email or gmail.profile_email()
+                thread_ids = gmail.fetch_recent_thread_ids(limit)
+                for thread_id in reversed(thread_ids):
+                    if db.get_thread(connection, thread_id) is not None:
+                        continue
+                    raw_messages = gmail.fetch_thread(
+                        thread_id,
+                        max_messages=self.config.gmail_max_thread_messages,
+                    )
+                    posted_count += self._mirror_raw_messages(
+                        connection,
+                        slack,
+                        raw_messages,
+                        my_email,
+                        allowed_backfill_thread_ids={thread_id},
+                    )
+
+                latest_history_id = gmail.profile_history_id()
+                if latest_history_id:
+                    db.set_state(
+                        connection,
+                        key=GMAIL_HISTORY_STATE_KEY,
+                        value=latest_history_id,
+                        updated_at=_now(),
+                    )
+
+        return posted_count
+
     def run_once(self, *, limit: int | None = None) -> int:
         fetch_limit = limit if limit is not None else self.config.fetch_limit
         posted_count = 0
@@ -112,27 +158,13 @@ class MirrorService:
                 user_id=self.config.slack_user_id,
             )
 
-            for raw_message in raw_messages:
-                email = parse_email(
-                    uid=raw_message.uid,
-                    gmail_thread_id=raw_message.gmail_thread_id,
-                    raw_bytes=raw_message.raw_bytes,
-                    my_email=my_email,
-                )
-                if not email.gmail_thread_id:
-                    LOGGER.warning("Skipping uid=%s without Gmail thread id", email.uid)
-                    continue
-                if db.has_posted_message(connection, email.message_id):
-                    continue
-                if (
-                    db.has_message(connection, email.message_id)
-                    and email.gmail_thread_id not in allowed_backfill_thread_ids
-                ):
-                    continue
-
-                slack_ts = self._mirror_email(connection, slack, email)
-                self._save_processed(connection, email, slack_ts, slack.channel_id)
-                posted_count += 1
+            posted_count += self._mirror_raw_messages(
+                connection,
+                slack,
+                raw_messages,
+                my_email,
+                allowed_backfill_thread_ids=allowed_backfill_thread_ids,
+            )
 
             if latest_history_id:
                 db.set_state(
@@ -141,6 +173,40 @@ class MirrorService:
                     value=latest_history_id,
                     updated_at=_now(),
                 )
+
+        return posted_count
+
+    def _mirror_raw_messages(
+        self,
+        connection,
+        slack: SlackPoster,
+        raw_messages: list[RawGmailMessage],
+        my_email: str,
+        *,
+        allowed_backfill_thread_ids: set[str],
+    ) -> int:
+        posted_count = 0
+        for raw_message in raw_messages:
+            email = parse_email(
+                uid=raw_message.uid,
+                gmail_thread_id=raw_message.gmail_thread_id,
+                raw_bytes=raw_message.raw_bytes,
+                my_email=my_email,
+            )
+            if not email.gmail_thread_id:
+                LOGGER.warning("Skipping uid=%s without Gmail thread id", email.uid)
+                continue
+            if db.has_posted_message(connection, email.message_id):
+                continue
+            if (
+                db.has_message(connection, email.message_id)
+                and email.gmail_thread_id not in allowed_backfill_thread_ids
+            ):
+                continue
+
+            slack_ts = self._mirror_email(connection, slack, email)
+            self._save_processed(connection, email, slack_ts, slack.channel_id)
+            posted_count += 1
 
         return posted_count
 

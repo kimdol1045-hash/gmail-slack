@@ -18,12 +18,11 @@ Write-Host "4/5 Gmail을 연결합니다. 브라우저에서 권한을 허용하
 Write-Host "5/5 Slack DM 전송을 테스트합니다."
 & ".\.venv\Scripts\python.exe" scripts\slack_probe.py
 
-Write-Host "기존 최근 메일을 Slack에 올리지 않고 기준점으로 기록합니다."
-& ".\.venv\Scripts\python.exe" -m app.main --bootstrap-existing --limit 20
+Write-Host "최근 Gmail thread 30개를 Slack에 초기 동기화합니다."
+& ".\.venv\Scripts\python.exe" -m app.main --seed-recent-threads --limit 30
 
 Write-Host ""
 Write-Host "설치 완료."
 Write-Host "계속 실행하려면:"
 Write-Host ".\.venv\Scripts\Activate.ps1"
 Write-Host "python -m app.main"
-

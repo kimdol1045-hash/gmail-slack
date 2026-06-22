@@ -20,11 +20,10 @@ python scripts/gmail_oauth_probe.py --authorize-only
 echo "5/5 Slack DM 전송을 테스트합니다."
 python scripts/slack_probe.py
 
-echo "기존 최근 메일을 Slack에 올리지 않고 기준점으로 기록합니다."
-python -m app.main --bootstrap-existing --limit 20
+echo "최근 Gmail thread 30개를 Slack에 초기 동기화합니다."
+python -m app.main --seed-recent-threads --limit 30
 
 echo ""
 echo "설치 완료."
 echo "계속 실행하려면:"
 echo "source .venv/bin/activate && python -m app.main"
-

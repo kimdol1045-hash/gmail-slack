@@ -110,6 +110,19 @@ class GmailApiClient:
 
         return raw_messages
 
+    def fetch_recent_thread_ids(self, limit: int) -> list[str]:
+        service = self._require_service()
+        request = {
+            "userId": "me",
+            "maxResults": limit,
+            "includeSpamTrash": False,
+        }
+        if self.query:
+            request["q"] = self.query
+
+        response = service.users().threads().list(**request).execute()
+        return [str(thread["id"]) for thread in response.get("threads", [])]
+
     def fetch_history_since(
         self,
         start_history_id: str,
