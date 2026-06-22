@@ -110,10 +110,69 @@ class GmailApiClient:
 
         return raw_messages
 
-    def profile_email(self) -> str:
+    def fetch_history_since(
+        self,
+        start_history_id: str,
+    ) -> tuple[list[RawGmailMessage], str]:
         service = self._require_service()
-        profile = service.users().getProfile(userId="me").execute()
-        return str(profile.get("emailAddress", ""))
+        message_ids: list[str] = []
+        seen_message_ids: set[str] = set()
+        latest_history_id = start_history_id
+        page_token = None
+
+        while True:
+            request = {
+                "userId": "me",
+                "startHistoryId": start_history_id,
+                "maxResults": 500,
+                "historyTypes": ["messageAdded"],
+            }
+            if page_token:
+                request["pageToken"] = page_token
+
+            response = service.users().history().list(**request).execute()
+            latest_history_id = str(response.get("historyId", latest_history_id))
+
+            for history in response.get("history", []):
+                for item in history.get("messagesAdded", []):
+                    message_ref = item.get("message", {})
+                    message_id = message_ref.get("id")
+                    if not message_id or message_id in seen_message_ids:
+                        continue
+                    seen_message_ids.add(message_id)
+                    message_ids.append(message_id)
+
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+
+        raw_messages: list[RawGmailMessage] = []
+        for message_id in message_ids:
+            message = (
+                service.users()
+                .messages()
+                .get(userId="me", id=message_id, format="raw")
+                .execute()
+            )
+            raw_messages.append(
+                RawGmailMessage(
+                    uid=message["id"],
+                    gmail_thread_id=message.get("threadId", ""),
+                    raw_bytes=_decode_gmail_raw(message["raw"]),
+                )
+            )
+
+        return raw_messages, latest_history_id
+
+    def profile_email(self) -> str:
+        return str(self.profile().get("emailAddress", ""))
+
+    def profile_history_id(self) -> str:
+        return str(self.profile().get("historyId", ""))
+
+    def profile(self) -> dict:
+        service = self._require_service()
+        return service.users().getProfile(userId="me").execute()
 
     def _require_service(self):
         if self._service is None:

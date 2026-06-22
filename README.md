@@ -15,7 +15,7 @@ Gmail thread
   └ 새 답장
 
 Slack 앱 DM
-  └ 부모 메시지: 제목 + 첫 발신자
+  └ 부모 메시지: 제목 + 첫 발신자 + 첫 메일 수신일
       ├ 메일 1
       ├ 메일 2
       └ 새 답장
@@ -38,6 +38,7 @@ Slack 앱 DM
 결과:
 Slack 부모글 A
   ├ 1번째 메일
+  ├ 2번째 메일
   ├ ...
   ├ 13번째 메일
   └ 14번째 새 답장
@@ -250,7 +251,7 @@ GMAIL_MAX_THREAD_MESSAGES=30
 BOOTSTRAP_EXISTING_MESSAGES=true
 
 POLL_INTERVAL_SECONDS=60
-FETCH_LIMIT=5
+FETCH_LIMIT=50
 DATABASE_PATH=data/mirror.sqlite3
 LOG_FILE=logs/gmail-chat.log
 LOG_LEVEL=INFO
@@ -261,8 +262,15 @@ LOG_LEVEL=INFO
 - `GMAIL_BACKFILL_THREADS=false`: 전체 과거 메일함을 소급하지 않음
 - `GMAIL_BACKFILL_ON_FIRST_SEEN_THREAD=true`: 새 답장이 생긴 thread 하나만 과거 포함해서 Slack thread 생성
 - `GMAIL_MAX_THREAD_MESSAGES=30`: 한 Gmail thread에서 최대 30개 메일까지만 가져옴
-- `FETCH_LIMIT=5`: 매번 최근 Gmail 메시지 5개만 확인
+- `FETCH_LIMIT=50`: 최초 bootstrap 또는 Gmail history 기준점이 없을 때 최근 50개를 기준으로 확인
 - `POLL_INTERVAL_SECONDS=60`: 60초마다 확인
+
+Polling 누락 방지:
+
+- Gmail OAuth 모드에서는 `historyId`를 로컬 DB에 저장합니다.
+- 첫 기준점 이후에는 `FETCH_LIMIT`만 보는 게 아니라 Gmail history API로 “지난 실행 이후 추가된 메시지”를 가져옵니다.
+- 그래서 1분 사이에 메일이 10개 이상 와도 Gmail history에 남아 있으면 놓치지 않습니다.
+- `FETCH_LIMIT`는 최초 bootstrap, 초기 기준점 생성, history 기준점이 없는 예외 상황에서만 중요합니다.
 
 ---
 

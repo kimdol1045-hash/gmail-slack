@@ -28,6 +28,12 @@ create table if not exists messages (
 
 create index if not exists idx_messages_thread
   on messages(gmail_thread_id);
+
+create table if not exists state (
+  key text primary key,
+  value text not null,
+  updated_at text not null
+);
 """
 
 
@@ -73,6 +79,33 @@ def has_posted_message(connection: sqlite3.Connection, message_id: str) -> bool:
 def message_count(connection: sqlite3.Connection) -> int:
     row = connection.execute("select count(*) as count from messages").fetchone()
     return int(row["count"])
+
+
+def get_state(connection: sqlite3.Connection, key: str) -> str | None:
+    row = connection.execute(
+        "select value from state where key = ?",
+        (key,),
+    ).fetchone()
+    return str(row["value"]) if row is not None else None
+
+
+def set_state(
+    connection: sqlite3.Connection,
+    *,
+    key: str,
+    value: str,
+    updated_at: str,
+) -> None:
+    connection.execute(
+        """
+        insert into state (key, value, updated_at)
+        values (?, ?, ?)
+        on conflict(key) do update set
+          value = excluded.value,
+          updated_at = excluded.updated_at
+        """,
+        (key, value, updated_at),
+    )
 
 
 def get_thread(

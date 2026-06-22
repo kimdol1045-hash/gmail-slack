@@ -13,6 +13,7 @@ from app.slack_client import SlackPoster
 
 
 LOGGER = logging.getLogger(__name__)
+GMAIL_HISTORY_STATE_KEY = "gmail_history_id"
 
 
 class MirrorService:
@@ -28,7 +29,17 @@ class MirrorService:
 
         with db.connect(self.config.database_path) as connection:
             db.init_db(connection)
-            raw_messages, my_email = self._fetch_raw_messages(fetch_limit)
+            raw_messages, my_email, latest_history_id = self._fetch_raw_messages(
+                connection,
+                fetch_limit,
+            )
+            if latest_history_id:
+                db.set_state(
+                    connection,
+                    key=GMAIL_HISTORY_STATE_KEY,
+                    value=latest_history_id,
+                    updated_at=_now(),
+                )
             return self._mark_existing_messages(connection, raw_messages, my_email)
 
     def run_once(self, *, limit: int | None = None) -> int:
@@ -37,7 +48,30 @@ class MirrorService:
 
         with db.connect(self.config.database_path) as connection:
             db.init_db(connection)
-            raw_messages, my_email = self._fetch_raw_messages(fetch_limit)
+            if (
+                self.config.gmail_auth_mode == "oauth"
+                and self.config.bootstrap_existing_messages
+                and db.message_count(connection) > 0
+                and db.get_state(connection, GMAIL_HISTORY_STATE_KEY) is None
+            ):
+                latest_history_id = self._current_gmail_history_id()
+                if latest_history_id:
+                    db.set_state(
+                        connection,
+                        key=GMAIL_HISTORY_STATE_KEY,
+                        value=latest_history_id,
+                        updated_at=_now(),
+                    )
+                    LOGGER.info(
+                        "Initialized Gmail history baseline at %s without Slack posts.",
+                        latest_history_id,
+                    )
+                    return 0
+
+            raw_messages, my_email, latest_history_id = self._fetch_raw_messages(
+                connection,
+                fetch_limit,
+            )
             allowed_backfill_thread_ids: set[str] = set()
 
             if self.config.bootstrap_existing_messages and db.message_count(connection) == 0:
@@ -50,6 +84,13 @@ class MirrorService:
                     "Bootstrapped %s existing Gmail message(s) without Slack posts.",
                     bootstrapped_count,
                 )
+                if latest_history_id:
+                    db.set_state(
+                        connection,
+                        key=GMAIL_HISTORY_STATE_KEY,
+                        value=latest_history_id,
+                        updated_at=_now(),
+                    )
                 return 0
 
             if (
@@ -92,6 +133,14 @@ class MirrorService:
                 slack_ts = self._mirror_email(connection, slack, email)
                 self._save_processed(connection, email, slack_ts, slack.channel_id)
                 posted_count += 1
+
+            if latest_history_id:
+                db.set_state(
+                    connection,
+                    key=GMAIL_HISTORY_STATE_KEY,
+                    value=latest_history_id,
+                    updated_at=_now(),
+                )
 
         return posted_count
 
@@ -153,18 +202,36 @@ class MirrorService:
 
     def _fetch_raw_messages(
         self,
+        connection,
         fetch_limit: int,
-    ) -> tuple[list[RawGmailMessage], str]:
+    ) -> tuple[list[RawGmailMessage], str, str]:
         if self.config.gmail_auth_mode == "oauth":
             with GmailApiClient(
                 client_secret_file=self.config.google_client_secret_file,
                 token_file=self.config.google_token_file,
                 query=self.config.gmail_query,
             ) as gmail:
-                raw_messages = gmail.fetch_recent(fetch_limit)
+                my_email = self.config.gmail_email or gmail.profile_email()
+                latest_history_id = ""
+                start_history_id = db.get_state(connection, GMAIL_HISTORY_STATE_KEY)
+                if start_history_id:
+                    try:
+                        raw_messages, latest_history_id = gmail.fetch_history_since(
+                            start_history_id,
+                        )
+                    except Exception:
+                        LOGGER.exception(
+                            "Failed to fetch Gmail history since %s; resetting baseline without Slack posts.",
+                            start_history_id,
+                        )
+                        raw_messages = []
+                        latest_history_id = gmail.profile_history_id()
+                else:
+                    raw_messages = gmail.fetch_recent(fetch_limit)
+                    latest_history_id = gmail.profile_history_id()
+
                 if self.config.gmail_backfill_threads:
                     raw_messages = self._backfill_oauth_threads(gmail, raw_messages)
-                my_email = self.config.gmail_email or gmail.profile_email()
         else:
             with GmailClient(
                 email_address=self.config.gmail_email,
@@ -173,8 +240,19 @@ class MirrorService:
             ) as gmail:
                 raw_messages = gmail.fetch_recent(fetch_limit)
                 my_email = self.config.gmail_email
+                latest_history_id = ""
 
-        return raw_messages, my_email
+        return raw_messages, my_email, latest_history_id
+
+    def _current_gmail_history_id(self) -> str:
+        if self.config.gmail_auth_mode != "oauth":
+            return ""
+        with GmailApiClient(
+            client_secret_file=self.config.google_client_secret_file,
+            token_file=self.config.google_token_file,
+            query=self.config.gmail_query,
+        ) as gmail:
+            return gmail.profile_history_id()
 
     def _mark_existing_messages(
         self,
@@ -258,7 +336,7 @@ class MirrorService:
                 created_at=_now(),
             )
             reply_ts = slack.post_message(
-                self._format_reply_message(email),
+                self._format_reply_message(email, include_date=False),
                 thread_ts=parent_ts,
             )
             LOGGER.info(
@@ -301,18 +379,22 @@ class MirrorService:
 
     @staticmethod
     def _format_parent_message(email: ParsedEmail) -> str:
-        return f"*{email.subject}*\nFrom: {_display_sender(email)}"
+        return (
+            f"*{email.subject}*\n"
+            f"*From:* {_display_sender(email)}\n"
+            f"*Date:* {_display_date(email.date)}"
+        )
 
     @staticmethod
-    def _format_reply_message(email: ParsedEmail) -> str:
+    def _format_reply_message(email: ParsedEmail, *, include_date: bool = True) -> str:
         body = email.body or "(empty body)"
         direction = "OUT" if email.direction == "outbound" else "IN"
         quoted_body = _quote_body(body)
-        return (
-            f"*[{direction}] {_display_sender(email)}*\n"
-            f"`{_display_date(email.date)}`\n"
-            f"{quoted_body}"
-        )
+        parts = [f"*[{direction}] {_display_sender(email)}*"]
+        if include_date:
+            parts.append(f"`{_display_date(email.date)}`")
+        parts.append(quoted_body)
+        return "\n".join(parts)
 
 
 def _display_sender(email: ParsedEmail) -> str:
