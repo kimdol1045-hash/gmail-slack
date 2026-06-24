@@ -52,6 +52,25 @@ class MirrorFormatTest(unittest.TestCase):
         self.assertNotIn("2026년", reply)
         self.assertIn("> First message body.", reply)
 
+    def test_utc_date_is_displayed_in_seoul_time(self) -> None:
+        email = ParsedEmail(
+            uid="1",
+            message_id="<msg@example.com>",
+            gmail_thread_id="thread-1",
+            subject="Re: Important thread",
+            sender="Alice <alice@example.com>",
+            sender_email="alice@example.com",
+            recipients=[],
+            date="2026-06-24T07:03:00+00:00",
+            direction="inbound",
+            body="Body.",
+        )
+
+        self.assertIn(
+            "*Date:* 2026년 6월 24일 오후 4:03",
+            MirrorService._format_parent_message(email),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 from email.utils import parsedate_to_datetime
+from zoneinfo import ZoneInfo
 
 from app import db
 from app.config import Config
@@ -14,6 +15,7 @@ from app.slack_client import SlackPoster
 
 LOGGER = logging.getLogger(__name__)
 GMAIL_HISTORY_STATE_KEY = "gmail_history_id"
+DISPLAY_TIMEZONE = ZoneInfo("Asia/Seoul")
 
 
 class MirrorService:
@@ -481,6 +483,10 @@ def _display_date(value: str) -> str:
             parsed = parsedate_to_datetime(value)
         except Exception:
             return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=DISPLAY_TIMEZONE)
+    else:
+        parsed = parsed.astimezone(DISPLAY_TIMEZONE)
     meridiem = "오전" if parsed.hour < 12 else "오후"
     hour = parsed.hour % 12
     if hour == 0:
