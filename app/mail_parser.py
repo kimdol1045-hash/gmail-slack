@@ -93,6 +93,10 @@ def clean_body(text: str) -> str:
     if not normalized:
         return ""
 
+    forwarded_cleaned = _clean_forwarded_message(normalized)
+    if forwarded_cleaned:
+        return forwarded_cleaned
+
     talon_cleaned = _talon_extract(normalized)
     if talon_cleaned:
         normalized = talon_cleaned
@@ -118,7 +122,7 @@ def strip_basic_quotes(text: str) -> str:
 
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped in quote_markers:
+        if stripped in quote_markers or _is_forwarded_marker(stripped):
             break
         if re.match(r"^[_-]{8,}$", stripped):
             break
@@ -139,6 +143,102 @@ def strip_basic_quotes(text: str) -> str:
     if signature_index != -1:
         without_quotes = without_quotes[:signature_index]
     return without_quotes.strip()
+
+
+def _clean_forwarded_message(text: str) -> str:
+    lines = text.splitlines()
+    marker_index = _forwarded_marker_index(lines)
+    if marker_index is None:
+        return ""
+
+    preamble = "\n".join(lines[:marker_index]).strip()
+    forwarded = "\n".join(lines[marker_index + 1 :]).strip()
+    if not forwarded:
+        return ""
+
+    forwarded_body = _strip_forwarded_headers(forwarded)
+    if not forwarded_body:
+        return ""
+
+    forwarded_body = strip_basic_quotes(forwarded_body)
+    if not forwarded_body:
+        return ""
+
+    preamble = strip_basic_quotes(preamble)
+    parts: list[str] = []
+    if preamble and not _looks_like_signature_only(preamble):
+        parts.append(preamble)
+    parts.append(forwarded_body)
+    return "\n\n".join(parts).strip()
+
+
+def _forwarded_marker_index(lines: list[str]) -> int | None:
+    for index, line in enumerate(lines):
+        if _is_forwarded_marker(line.strip()):
+            return index
+    return None
+
+
+def _is_forwarded_marker(line: str) -> bool:
+    return bool(re.match(r"^-{2,}\s*Forwarded message\s*-{2,}$", line, re.IGNORECASE))
+
+
+def _strip_forwarded_headers(text: str) -> str:
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+
+    if index >= len(lines) or not _is_forwarded_header_line(lines[index].strip()):
+        return text.strip()
+
+    index += 1
+    while index < len(lines) and lines[index].strip():
+        index += 1
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+
+    return "\n".join(lines[index:]).strip()
+
+
+def _is_forwarded_header_line(line: str) -> bool:
+    return bool(
+        re.match(r"^(From|Sent|To|Cc|Subject|Date):\s*", line, flags=re.IGNORECASE)
+        or re.match(r"^(보낸사람|보낸시간|받는사람|참조|제목)\s*:", line)
+    )
+
+
+def _looks_like_signature_only(text: str) -> bool:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines or len(lines) > 8:
+        return False
+
+    signature_lines = 0
+    hard_signature_lines = 0
+    for line in lines:
+        if _is_signature_line(line):
+            signature_lines += 1
+        if _is_hard_signature_line(line):
+            hard_signature_lines += 1
+
+    return signature_lines == len(lines) and hard_signature_lines > 0
+
+
+def _is_signature_line(line: str) -> bool:
+    return bool(
+        _is_hard_signature_line(line)
+        or re.search(r"(이사|대표|팀장|책임|그룹|팀|부서|Manager|Director)", line, re.IGNORECASE)
+        or line == "--"
+    )
+
+
+def _is_hard_signature_line(line: str) -> bool:
+    return bool(
+        "@" in line
+        or re.search(r"\b\d{2,4}-\d{3,4}-\d{4}\b", line)
+        or re.search(r"(전화|모바일|이메일|주소|Tel|Phone|Mobile|Fax)", line, re.IGNORECASE)
+        or re.search(r"(\(주\)|주식회사|Inc\.?|Ltd\.?|Corp\.?|Company)", line, re.IGNORECASE)
+    )
 
 
 def html_to_text(html: str) -> str:
